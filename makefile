@@ -14,7 +14,7 @@ ip.o: ip.h ip.cpp
 mac.o : mac.h mac.cpp
 
 arp-spoof: main.o arphdr.o ethhdr.o ip.o mac.o
-	$(LINK.cc) $^ $(LOADLIBES) $(LDLIBS) -o $@
+	$(LINK.cc) $^ $(LOADLIBES) $(LDLIBS) -pthread -o $@
 
 clean:
 	rm -f arp-spoof *.o

