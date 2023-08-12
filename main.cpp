@@ -200,6 +200,25 @@ void bgSendArp(pcap_t* handle, Mac sender_mac, Mac my_mac, Ip sender_ip, Ip targ
 	}
 }
 
+bool sendRelayPacket(pcap_t* handle, struct EthArpPacket *listen_hdr, Mac my_mac, Mac sender_mac, Mac target_mac, Ip my_ip, Ip sender_ip, Ip target_ip)
+{
+	if((listen_hdr->eth_.dmac_ == my_mac) && (listen_hdr->eth_.smac_ == sender_mac))
+	{
+		printf("need to relay\n");
+		listen_hdr->eth_.dmac_ == target_mac;
+		listen_hdr->eth_.smac_ == my_mac;
+		return true;
+		// printf("sending arp target:  %s\n", std::string(arp_tip).c_str());
+		int res = pcap_sendpacket(handle, reinterpret_cast<const u_char*>(&listen_hdr), sizeof(EthArpPacket));
+		if (res != 0) {
+			fprintf(stderr, "pcap_sendpacket return %d error=%s\n", res, pcap_geterr(handle))    ;
+			return false;
+		}
+		return true;
+	}
+	return false;
+}
+
 int main(int argc, char* argv[])
 {
     // Checking the arguments
@@ -271,6 +290,11 @@ int main(int argc, char* argv[])
 			}
 
 			struct EthArpPacket *listen_hdr = (struct EthArpPacket *)listen_packet;
+
+			if(sendRelayPacket(handle, listen_hdr, my_mac, sender_mac, target_mac, my_ip, sender_ip, target_ip))
+			{
+				printf("Sent Relay Packet\n");
+			}
 
 			if(isRecovered(listen_hdr, my_mac, sender_mac, target_mac))
 			{
